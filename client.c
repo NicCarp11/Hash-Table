@@ -14,19 +14,23 @@ void error(const char *msg) {
     exit(1);
 }
 
+typedef struct {
+    int head;
+    int tail;
+    int size;
+    char buffer[SHM_SIZE - 3 * sizeof(int)];
+} CircularBuffer;
+
 int main() {
     int shm_fd = shm_open(SHM_NAME, O_RDWR, 0666);
     if (shm_fd == -1) {
         error("shm_open");
     }
 
-    char *shm_ptr = mmap(0, SHM_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
-    if (shm_ptr == MAP_FAILED) {
+    CircularBuffer *cbuf = mmap(0, SHM_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
+    if (cbuf == MAP_FAILED) {
         error("mmap");
     }
-
-    char *command_ptr = shm_ptr + sizeof(int);  
-    int *flag_ptr = (int *)shm_ptr;
 
     char command[256];
     while (1) {
@@ -37,18 +41,19 @@ int main() {
             break;
         }
 
-        strncpy(command_ptr, command, SHM_SIZE - sizeof(int));
-
-        *flag_ptr = 1;
-
-        while (*flag_ptr != 0) {
-            usleep(100000); 
+        int len = strlen(command) + 1;
+        if ((cbuf->tail + len) % (SHM_SIZE - 3 * sizeof(int)) != cbuf->head) {
+            strncpy(&cbuf->buffer[cbuf->tail], command, len);
+            cbuf->tail = (cbuf->tail + len) % (SHM_SIZE - 3 * sizeof(int));
+        } else {
+            printf("Buffer is full, please try again later.\n");
         }
 
-        printf("Server response: %s", command_ptr);
+        usleep(100000); // 100ms
+        printf("Server response: %s", command);
     }
 
-    munmap(shm_ptr, SHM_SIZE);
+    munmap(cbuf, SHM_SIZE);
     close(shm_fd);
     return 0;
 }

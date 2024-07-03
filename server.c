@@ -12,51 +12,63 @@
 #define SHM_SIZE 1024
 #define THREAD_POOL_SIZE 4
 
-
 void error(const char *msg) {
     perror(msg);
     exit(1);
 }
 
 typedef struct {
+    int head;
+    int tail;
+    int size;
+    char buffer[SHM_SIZE - 3 * sizeof(int)];
+} CircularBuffer;
+
+typedef struct {
     HashTable *table;
-    int shm_fd;
-    char *shm_ptr;
+    CircularBuffer *cbuf;
     pthread_mutex_t *mutex;
 } ThreadData;
 
-
-void *handle_client (void *arg) {
+void *handle_client(void *arg) {
     ThreadData *data = (ThreadData *)arg;
-    char *command_ptr = data->shm_ptr + sizeof(int);
-    int *flag_ptr = (int *)data->shm_ptr;
+    CircularBuffer *cbuf = data->cbuf;
 
     while (1) {
         pthread_mutex_lock(data->mutex);
 
-        if (*flag_ptr == 1) {
-            printf("Received command: %s\n", command_ptr);
+        if (cbuf->head != cbuf->tail) {
+            char command[256];
+            int len = strlen(&cbuf->buffer[cbuf->head]) + 1;
+            strncpy(command, &cbuf->buffer[cbuf->head], len);
+
+            cbuf->head = (cbuf->head + len) % (SHM_SIZE - 3 * sizeof(int));
+
+            pthread_mutex_unlock(data->mutex);
 
             char key[256];
             char value[256];
-            if (sscanf(command_ptr, "insert %s %s", key, value) == 2) {
+            if (sscanf(command, "insert %s %s", key, value) == 2) {
                 insert(data->table, key, value);
-                strcpy(command_ptr, "Inserted\n");
-            } else if (sscanf(command_ptr, "get %s", key) == 1) {
-                get_all(data->table, key, command_ptr, SHM_SIZE);
-            } else if (sscanf(command_ptr, "delete %s", key) == 1) {
+                strcpy(command, "Inserted\n");
+            } else if (sscanf(command, "get %s", key) == 1) {
+                get_all(data->table, key, command, sizeof(command));
+            } else if (sscanf(command, "delete %s", key) == 1) {
                 delete_table(data->table, key);
-                strcpy(command_ptr, "Deleted\n");
-            } else if (strncmp(command_ptr, "print", 5) == 0) {
-                print_table(data->table, command_ptr, SHM_SIZE);
+                strcpy(command, "Deleted\n");
+            } else if (strncmp(command, "print", 5) == 0) {
+                print_table(data->table, command, sizeof(command));
             } else {
-                strcpy(command_ptr, "Unknown command\n");
+                strcpy(command, "Unknown command\n");
             }
 
-            *flag_ptr = 0;
+            // Optionally, print the server's response
+            printf("Server response: %s", command);
+
+        } else {
+            pthread_mutex_unlock(data->mutex);
+            usleep(100000); // 100ms
         }
-        pthread_mutex_unlock(data->mutex);
-        usleep(100000); // 100ms
     }
 }
 
@@ -78,15 +90,20 @@ int main(int argc, char *argv[]) {
         error("ftruncate");
     }
 
-    char *shm_ptr = mmap(0, SHM_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
-    if (shm_ptr == MAP_FAILED) {
+    CircularBuffer *cbuf = mmap(0, SHM_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
+    if (cbuf == MAP_FAILED) {
         error("mmap");
     }
 
-    pthread_t threads[THREAD_POOL_SIZE];
+    // Initialize circular buffer
+    cbuf->head = 0;
+    cbuf->tail = 0;
+    cbuf->size = SHM_SIZE - 3 * sizeof(int);
+
     pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 
-    ThreadData data = {table, shm_fd, shm_ptr, &mutex};
+    pthread_t threads[THREAD_POOL_SIZE];
+    ThreadData data = {table, cbuf, &mutex};
 
     for (int i = 0; i < THREAD_POOL_SIZE; i++) {
         pthread_create(&threads[i], NULL, handle_client, (void *)&data);
@@ -96,9 +113,7 @@ int main(int argc, char *argv[]) {
         pthread_join(threads[i], NULL);
     }
 
-
-
-    munmap(shm_ptr, SHM_SIZE);
+    munmap(cbuf, SHM_SIZE);
     shm_unlink(SHM_NAME);
     close(shm_fd);
     destroy_table(table);
