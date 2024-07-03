@@ -42,7 +42,7 @@ int main() {
         }
 
         int len = strlen(command) + 1;
-        if ((cbuf->tail + len) % (SHM_SIZE - 3 * sizeof(int)) != cbuf->head) {
+        if ((cbuf->tail + len) % (SHM_SIZE - 3 * sizeof(int)) != cbuf->head) { // check is buffer is full
             strncpy(&cbuf->buffer[cbuf->tail], command, len);
             cbuf->tail = (cbuf->tail + len) % (SHM_SIZE - 3 * sizeof(int));
         } else {

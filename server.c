@@ -18,8 +18,8 @@ void error(const char *msg) {
 }
 
 typedef struct {
-    int head;
-    int tail;
+    int head; // the point producer insert the new product
+    int tail; // the point consumer find the next product
     int size;
     char buffer[SHM_SIZE - 3 * sizeof(int)];
     pthread_mutex_t mutex; // Aggiunta del mutex
@@ -37,11 +37,12 @@ void *handle_client(void *arg) {
     while (1) {
         pthread_mutex_lock(&cbuf->mutex);
 
-        if (cbuf->head != cbuf->tail) {
+        if (cbuf->head != cbuf->tail) { // if the buffer is empty, we do not have any commands to process
             char command[256];
+            // command length (+1 included the \n)
             int len = strlen(&cbuf->buffer[cbuf->head]) + 1;
             strncpy(command, &cbuf->buffer[cbuf->head], len);
-
+            // update the head
             cbuf->head = (cbuf->head + len) % cbuf->size;
 
             pthread_mutex_unlock(&cbuf->mutex);
@@ -78,6 +79,7 @@ int main(int argc, char *argv[]) {
     size_t size = atoi(argv[1]);
     HashTable *table = create_table(size);
 
+    // 0666 permission: read and write for owner, group, and others
     int shm_fd = shm_open(SHM_NAME, O_CREAT | O_RDWR, 0666);
     if (shm_fd == -1) {
         error("shm_open");
@@ -87,6 +89,7 @@ int main(int argc, char *argv[]) {
         error("ftruncate");
     }
 
+    // the memory created by mmap is sufficient to store the CircularBuffer structure
     CircularBuffer *cbuf = mmap(0, SHM_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
     if (cbuf == MAP_FAILED) {
         error("mmap");
@@ -96,7 +99,7 @@ int main(int argc, char *argv[]) {
     cbuf->head = 0;
     cbuf->tail = 0;
     cbuf->size = SHM_SIZE - 3 * sizeof(int);
-    pthread_mutex_init(&cbuf->mutex, NULL); // Inizializzazione del mutex
+    pthread_mutex_init(&cbuf->mutex, NULL); // mutex initialization
 
     pthread_t threads[THREAD_POOL_SIZE];
     ThreadData data = {table, cbuf};
