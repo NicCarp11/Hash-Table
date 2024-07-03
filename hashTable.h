@@ -12,10 +12,11 @@ typedef struct HashNode {
 } HashNode;
 
 typedef struct HashTable {
-    HashNode **buckets;
     size_t size;
-    pthread_rwlock_t rwlock;
+    HashNode **buckets;
+    pthread_rwlock_t *bucket_locks; // Array di RW locks per i buckets
 } HashTable;
+
 
 HashTable *create_table(size_t size);
 void destroy_table(HashTable *table);

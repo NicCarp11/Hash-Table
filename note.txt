@@ -1,0 +1,3 @@
+Bug to fix:
+- print and get output in server side 
+- run the scalability test with 10 threads and 100 operations, at a certain point the output is segmentation fault

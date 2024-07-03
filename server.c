@@ -22,12 +22,12 @@ typedef struct {
     int tail;
     int size;
     char buffer[SHM_SIZE - 3 * sizeof(int)];
+    pthread_mutex_t mutex; // Aggiunta del mutex
 } CircularBuffer;
 
 typedef struct {
     HashTable *table;
     CircularBuffer *cbuf;
-    pthread_mutex_t *mutex;
 } ThreadData;
 
 void *handle_client(void *arg) {
@@ -35,38 +35,35 @@ void *handle_client(void *arg) {
     CircularBuffer *cbuf = data->cbuf;
 
     while (1) {
-        pthread_mutex_lock(data->mutex);
+        pthread_mutex_lock(&cbuf->mutex);
 
         if (cbuf->head != cbuf->tail) {
             char command[256];
             int len = strlen(&cbuf->buffer[cbuf->head]) + 1;
             strncpy(command, &cbuf->buffer[cbuf->head], len);
 
-            cbuf->head = (cbuf->head + len) % (SHM_SIZE - 3 * sizeof(int));
+            cbuf->head = (cbuf->head + len) % cbuf->size;
 
-            pthread_mutex_unlock(data->mutex);
+            pthread_mutex_unlock(&cbuf->mutex);
 
             char key[256];
             char value[256];
             if (sscanf(command, "insert %s %s", key, value) == 2) {
                 insert(data->table, key, value);
-                strcpy(command, "Inserted\n");
+                printf("Server response: Inserted\n");
             } else if (sscanf(command, "get %s", key) == 1) {
                 get_all(data->table, key, command, sizeof(command));
             } else if (sscanf(command, "delete %s", key) == 1) {
                 delete_table(data->table, key);
-                strcpy(command, "Deleted\n");
             } else if (strncmp(command, "print", 5) == 0) {
                 print_table(data->table, command, sizeof(command));
+                printf("Server response: %s\n", command);
             } else {
-                strcpy(command, "Unknown command\n");
+                printf("Server response: Unknown command: %s\n", command);
             }
 
-            // Optionally, print the server's response
-            printf("Server response: %s", command);
-
         } else {
-            pthread_mutex_unlock(data->mutex);
+            pthread_mutex_unlock(&cbuf->mutex);
             usleep(100000); // 100ms
         }
     }
@@ -99,11 +96,10 @@ int main(int argc, char *argv[]) {
     cbuf->head = 0;
     cbuf->tail = 0;
     cbuf->size = SHM_SIZE - 3 * sizeof(int);
-
-    pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+    pthread_mutex_init(&cbuf->mutex, NULL); // Inizializzazione del mutex
 
     pthread_t threads[THREAD_POOL_SIZE];
-    ThreadData data = {table, cbuf, &mutex};
+    ThreadData data = {table, cbuf};
 
     for (int i = 0; i < THREAD_POOL_SIZE; i++) {
         pthread_create(&threads[i], NULL, handle_client, (void *)&data);
