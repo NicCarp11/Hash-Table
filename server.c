@@ -30,6 +30,17 @@ void *handle_client (void *arg) {
     ThreadData *data = (ThreadData *)arg;
     char *command_ptr = data->shm_ptr + sizeof(int);
     int *flag_ptr = (int *)data->shm_ptr;
+/*
++-----------+---------------------------+
+| Flag (int)|        Command Area       |
++-----------+---------------------------+
+0           4                           1024
+
+flag_ptr points to the first 4 bytes of the shared memory
+command_ptr points to the area after the first 4 bytes of the shared memory, where the command is stored
+
+
+*/
 
     while (1) {
         pthread_mutex_lock(data->mutex);
@@ -69,6 +80,7 @@ int main(int argc, char *argv[]) {
     size_t size = atoi(argv[1]);
     HashTable *table = create_table(size);
 
+    // create or open a shared memory object. It is an integer that that will contain the object descriptor
     int shm_fd = shm_open(SHM_NAME, O_CREAT | O_RDWR, 0666);
     if (shm_fd == -1) {
         error("shm_open");
@@ -78,6 +90,7 @@ int main(int argc, char *argv[]) {
         error("ftruncate");
     }
 
+    // retrieve the pointer to the shared memory
     char *shm_ptr = mmap(0, SHM_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
     if (shm_ptr == MAP_FAILED) {
         error("mmap");
@@ -85,12 +98,18 @@ int main(int argc, char *argv[]) {
 
     pthread_t threads[THREAD_POOL_SIZE];
     pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+    // create a pool of threads
 
     ThreadData data = {table, shm_fd, shm_ptr, &mutex};
+    // to create a pool of thread, we need to pass a pointer to the thread
+    // the function that the thread will execute
+    // and the data that the thread will use
 
     for (int i = 0; i < THREAD_POOL_SIZE; i++) {
         pthread_create(&threads[i], NULL, handle_client, (void *)&data);
     }
+
+    // the server will wait for the threads to finish
 
     for (int i = 0; i < THREAD_POOL_SIZE; i++) {
         pthread_join(threads[i], NULL);
