@@ -10,10 +10,54 @@
 
 #define SHM_NAME "/my_shm"
 #define SHM_SIZE 1024
+#define THREAD_POOL_SIZE 4
+
 
 void error(const char *msg) {
     perror(msg);
     exit(1);
+}
+
+typedef struct {
+    HashTable *table;
+    int shm_fd;
+    char *shm_ptr;
+    pthread_mutex_t *mutex;
+} ThreadData;
+
+
+void *handle_client (void *arg) {
+    ThreadData *data = (ThreadData *)arg;
+    char *command_ptr = data->shm_ptr + sizeof(int);
+    int *flag_ptr = (int *)data->shm_ptr;
+
+    while (1) {
+        pthread_mutex_lock(data->mutex);
+
+        if (*flag_ptr == 1) {
+            printf("Received command: %s\n", command_ptr);
+
+            char key[256];
+            char value[256];
+            if (sscanf(command_ptr, "insert %s %s", key, value) == 2) {
+                insert(data->table, key, value);
+                strcpy(command_ptr, "Inserted\n");
+            } else if (sscanf(command_ptr, "get %s", key) == 1) {
+                get_all(data->table, key, command_ptr, SHM_SIZE);
+            } else if (sscanf(command_ptr, "delete %s", key) == 1) {
+                delete_table(data->table, key);
+                strcpy(command_ptr, "Deleted\n");
+            } else if (strncmp(command_ptr, "print", 5) == 0) {
+                print_table(data->table, command_ptr, SHM_SIZE);
+            } else {
+                strcpy(command_ptr, "Unknown command\n");
+            }
+
+            *flag_ptr = 0;
+        }
+        pthread_mutex_unlock(data->mutex);
+        usleep(100000); // 100ms
+    }
 }
 
 int main(int argc, char *argv[]) {
@@ -39,35 +83,20 @@ int main(int argc, char *argv[]) {
         error("mmap");
     }
 
-    char *command_ptr = shm_ptr + sizeof(int);  
-    int *flag_ptr = (int *)shm_ptr;
+    pthread_t threads[THREAD_POOL_SIZE];
+    pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 
-    while (1) {
-        
-        if (*flag_ptr == 1) {
-            printf("Received command: %s\n", command_ptr);
+    ThreadData data = {table, shm_fd, shm_ptr, &mutex};
 
-            char key[256];
-            char value[256];
-            if (sscanf(command_ptr, "insert %s %s", key, value) == 2) {
-                insert(table, key, value);
-                strcpy(command_ptr, "Inserted\n");
-            } else if (sscanf(command_ptr, "get %s", key) == 1) {
-                get_all(table, key, command_ptr, SHM_SIZE);
-            } else if (sscanf(command_ptr, "delete %s", key) == 1) {
-                delete_table(table, key);
-                strcpy(command_ptr, "Deleted\n");
-            } else if (strncmp(command_ptr, "print", 5) == 0) {
-                print_table(table, command_ptr, SHM_SIZE);
-            } else {
-                strcpy(command_ptr, "Unknown command\n");
-            }
-
-            *flag_ptr = 0;
-        }
-
-        usleep(100000); // 100ms
+    for (int i = 0; i < THREAD_POOL_SIZE; i++) {
+        pthread_create(&threads[i], NULL, handle_client, (void *)&data);
     }
+
+    for (int i = 0; i < THREAD_POOL_SIZE; i++) {
+        pthread_join(threads[i], NULL);
+    }
+
+
 
     munmap(shm_ptr, SHM_SIZE);
     shm_unlink(SHM_NAME);
