@@ -44,7 +44,7 @@ void get_all(HashTable *table, char *key, char *buffer, size_t buffer_size) {
     size_t len = 0;
     while (node) {
         if (strcmp(node->key, key) == 0) {
-            len += snprintf(buffer + len, buffer_size - len, "Value for key %s: %s\n", key, node->value);
+            len += snprintf(buffer + len, buffer_size - len, "\nValue for key %s: %s", key, node->value);
             found = 1;
         }
         node = node->next;

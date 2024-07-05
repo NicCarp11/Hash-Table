@@ -10,6 +10,8 @@
 
 #define SHM_NAME "/my_shm"
 #define SHM_SIZE 1024
+#define RESPONSE_SHM_NAME "/response_shm"
+#define RESPONSE_SHM_SIZE 1024
 #define THREAD_POOL_SIZE 4
 
 void error(const char *msg) {
@@ -22,47 +24,51 @@ typedef struct {
     int tail; // the point consumer find the next product
     int size;
     char buffer[SHM_SIZE - 3 * sizeof(int)];
-    pthread_mutex_t mutex; // Aggiunta del mutex
+    pthread_mutex_t mutex; 
 } CircularBuffer;
+
+typedef struct {
+    int response_ready; // 
+    char response[RESPONSE_SHM_SIZE - sizeof(int)];
+} SharedResponse;
 
 typedef struct {
     HashTable *table;
     CircularBuffer *cbuf;
+    SharedResponse *shared_response;
 } ThreadData;
 
 void *handle_client(void *arg) {
     ThreadData *data = (ThreadData *)arg;
     CircularBuffer *cbuf = data->cbuf;
+    SharedResponse *shared_response = data->shared_response;
 
     while (1) {
         pthread_mutex_lock(&cbuf->mutex);
 
-        if (cbuf->head != cbuf->tail) { // if the buffer is empty, we do not have any commands to process
+        if (cbuf->head != cbuf->tail) { // if the buffer is not empty and if there are new commands written by the clients
             char command[256];
-            // command length (+1 included the \n)
             int len = strlen(&cbuf->buffer[cbuf->head]) + 1;
             strncpy(command, &cbuf->buffer[cbuf->head], len);
-            // update the head
             cbuf->head = (cbuf->head + len) % cbuf->size;
 
             pthread_mutex_unlock(&cbuf->mutex);
 
-            char key[256];
-            char value[256];
+            char key[256], value[256];
             if (sscanf(command, "insert %s %s", key, value) == 2) {
                 insert(data->table, key, value);
-                printf("Server response: Inserted\n");
+                snprintf(shared_response->response, sizeof(shared_response->response), "Inserted key %s with value %s", key, value);
             } else if (sscanf(command, "get %s", key) == 1) {
-                get_all(data->table, key, command, sizeof(command));
+                get_all(data->table, key, shared_response->response, sizeof(shared_response->response));
             } else if (sscanf(command, "delete %s", key) == 1) {
                 delete_table(data->table, key);
+                snprintf(shared_response->response, sizeof(shared_response->response), "Deleted key %s", key);
             } else if (strncmp(command, "print", 5) == 0) {
-                print_table(data->table, command, sizeof(command));
-                printf("Server response: %s\n", command);
+                print_table(data->table, shared_response->response, sizeof(shared_response->response));
             } else {
-                printf("Server response: Unknown command: %s\n", command);
+                snprintf(shared_response->response, sizeof(shared_response->response), "Unknown command: %s", command);
             }
-
+            shared_response->response_ready = 1;
         } else {
             pthread_mutex_unlock(&cbuf->mutex);
             usleep(100000); // 100ms
@@ -101,8 +107,24 @@ int main(int argc, char *argv[]) {
     cbuf->size = SHM_SIZE - 3 * sizeof(int);
     pthread_mutex_init(&cbuf->mutex, NULL); // mutex initialization
 
+    int response_shm_fd = shm_open(RESPONSE_SHM_NAME, O_CREAT | O_RDWR, 0666);
+    if (response_shm_fd == -1) {
+        error("shm_open response");
+    }
+
+    if (ftruncate(response_shm_fd, RESPONSE_SHM_SIZE) == -1) {
+        error("ftruncate response");
+    }
+
+    SharedResponse *shared_response = mmap(0, RESPONSE_SHM_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, response_shm_fd, 0);
+    if (shared_response == MAP_FAILED) {
+        error("mmap response");
+    }
+
+    shared_response->response_ready = 0; // 
+
     pthread_t threads[THREAD_POOL_SIZE];
-    ThreadData data = {table, cbuf};
+    ThreadData data = {table, cbuf, shared_response};
 
     for (int i = 0; i < THREAD_POOL_SIZE; i++) {
         pthread_create(&threads[i], NULL, handle_client, (void *)&data);
@@ -115,6 +137,11 @@ int main(int argc, char *argv[]) {
     munmap(cbuf, SHM_SIZE);
     shm_unlink(SHM_NAME);
     close(shm_fd);
+
+    munmap(shared_response, RESPONSE_SHM_SIZE);
+    shm_unlink(RESPONSE_SHM_NAME);
+    close(response_shm_fd);
+
     destroy_table(table);
     return 0;
 }
